@@ -1,0 +1,246 @@
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <array>
+#include <cstdint>
+
+using namespace std;
+
+const string Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+string Encode(const vector<uint8_t>& data) {
+    string result;
+
+    for (size_t i = 0; i < data.size(); i += 3) {
+
+        uint8_t x1 = data[i];
+        uint8_t x2 = (i + 1 < data.size()) ? data[i + 1] : 0;
+        uint8_t x3 = (i + 2 < data.size()) ? data[i + 2] : 0;
+
+        uint8_t y1 =  x1 >> 2;
+        uint8_t y2 = ((x1 & 0x03) << 4) | (x2 >> 4);
+        uint8_t y3 = ((x2 & 0x0F) << 2) | (x3 >> 6);
+        uint8_t y4 =  x3 & 0x3F;
+
+        result += Alphabet[y1];
+        result += Alphabet[y2];
+
+        if (i + 1 < data.size())
+            result += Alphabet[y3];
+        else
+            result += '=';
+
+        if (i + 2 < data.size())
+            result += Alphabet[y4];
+        else
+            result += '=';
+    }
+
+    return result;
+}
+
+int EncodeFile(const string& input, const string& output) {
+    ifstream in(input, ios::binary);
+    if (!in) {
+        cerr << "Error: cannot open input file\n";
+        return 1;
+    }
+
+    vector<uint8_t> data((istreambuf_iterator<char>(in)), istreambuf_iterator<char>());
+    string encoded = Encode(data);
+    ofstream out(output);
+
+    if (!out) {
+        cerr << "Error: cannot open output file\n";
+        return 1;
+    }
+
+    for (size_t i = 0; i < encoded.size(); i += 76)
+        out << encoded.substr(i, 76) << '\n';
+
+    return 0;
+}
+
+array<int, 256> BuildLookup() {
+    array<int, 256> table;
+    table.fill(-1);
+
+    for (size_t i = 0; i < Alphabet.size(); ++i)
+        table[(unsigned char)Alphabet[i]] = i;
+
+    return table;
+}
+
+vector<uint8_t> Decode(const string& text) {
+    static array<int, 256> lookup = BuildLookup();
+
+    vector<uint8_t> output;
+    uint32_t buffer = 0;
+    int bits = 0;
+
+    for (char c : text) {
+        if (c == '=') break;
+
+        int value = lookup[(unsigned char)c];
+        buffer = (buffer << 6) | value;
+        bits += 6;
+
+        if (bits >= 8) {
+            bits -= 8;
+            output.push_back((buffer >> bits) & 0xFF);
+        }
+    }
+
+    return output;
+}
+
+bool IsBase64(char c) {
+    return Alphabet.find(c) != string::npos;
+}
+
+bool ValidateFile(const string& filename, string& base64_data, bool& warning_after_end){
+    ifstream in(filename);
+    if (!in) {
+        cerr << "Error: cannot open file\n";
+        return false;
+    }
+
+    vector<pair<int,string>> data_lines;
+    string line;
+    int line_number = 0;
+
+    while (getline(in, line)) {
+        line_number++;
+
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+
+        if (line.empty())
+            continue;
+
+        if (line[0] == '-')
+            continue;
+
+        data_lines.push_back({line_number, line});
+    }
+
+    if (data_lines.empty()) {
+        cerr << "Error: no Base64 data found\n";
+        return false;
+    }
+    for (size_t i = 0; i < data_lines.size(); i++) {
+        const string& current = data_lines[i].second;
+        int original_line = data_lines[i].first;
+
+        bool is_last = (i == data_lines.size() - 1);
+
+        if (!is_last && current.size() != 76) {
+            cerr << "Line " << original_line
+                 << ": Incorrect line length ("
+                 << current.size() << ")\n";
+            return false;
+        }
+
+        if (is_last && current.size() > 76) {
+            cerr << "Line " << original_line
+                 << ": Incorrect line length ("
+                 << current.size() << ")\n";
+            return false;
+        }
+    }
+
+    bool message_ended = false;
+
+    for (size_t i = 0; i < data_lines.size(); i++) {
+        const string& current = data_lines[i].second;
+        int original_line = data_lines[i].first;
+
+        for (size_t j = 0; j < current.size(); j++) {
+            char c = current[j];
+
+            if (message_ended) {
+                warning_after_end = true;
+                continue;
+            }
+
+            if (c == '=') {
+                message_ended = true;
+
+                for (size_t k = j; k < current.size(); k++) {
+                    if (current[k] != '=') {
+                        cerr << "Line " << original_line
+                             << ", symbol " << (k + 1)
+                             << ": Incorrect padding\n";
+                        return false;
+                    }
+                }
+                break;
+            }
+
+            if (!IsBase64(c)) {
+                cerr << "Line " << original_line
+                     << ", symbol " << (j + 1)
+                     << ": Incorrect input symbol\n";
+                return false;
+            }
+        }
+        base64_data += current;
+    }
+
+    return true;
+}
+
+int main(int argc, char* argv[]) {
+
+    if (argc < 3 || argc > 4) {
+        cerr << "Usage:\n";
+        cerr << "  base64 encode <input> <output>\n";
+        cerr << "  base64 decode <input> <output>\n";
+        return 1;
+    }
+
+    string mode = argv[1];
+    string input = argv[2];
+
+    if (mode == "encode") {
+        string output;
+        if (argc == 4) output = argv[3];
+        else output = input + ".base64";
+        return EncodeFile(input, output);
+    }
+
+    else if (mode == "decode") {
+
+        if (argc != 4) {
+            cerr << "Decode requires output file name\n";
+            return 1;
+        }
+
+        string output = argv[3];
+        string base64_data;
+        bool warning = false;
+
+        if (!ValidateFile(input, base64_data, warning))
+            return 1;
+
+        vector<uint8_t> decoded = Decode(base64_data);
+
+        ofstream out(output, ios::binary);
+        if (!out) {
+            cerr << "Error: cannot open output file\n";
+            return 1;
+        }
+
+        out.write(reinterpret_cast<const char*>(decoded.data()), decoded.size());
+
+        if (warning)
+            cout << "Warning: Data after the end of message found.\n";
+
+        return 0;
+    }
+
+    else {
+        cerr << "Invalid mode. Use encode or decode.\n";
+        return 1;
+    }
+}
