@@ -1,0 +1,365 @@
+#include <iostream>
+#include <fstream>
+#include <cstdint>
+#include <queue>
+#include <vector>
+using namespace std;
+
+class BitWriter {
+private:
+    ofstream &file;
+    uint8_t temp;
+    int c;
+
+public:
+    BitWriter(ofstream &f) : file(f), temp(0), c(0){}
+
+    void WriteBitSequence(uint32_t data, int length){
+        for (int i = length - 1; i >= 0; i--){
+            int bit = (data >> i) & 1;
+            temp = (temp << 1) | bit;
+            c++;
+
+            if (c == 8){
+                file.put(temp);
+                temp = 0;
+                c = 0;
+            }
+        }
+    }
+
+    void Padding(){
+        if (c > 0){
+            temp <<= (8 - c);
+            file.put(temp);
+
+            temp = 0;
+            c = 0;
+        }
+    }
+
+    ~BitWriter(){
+        Padding();
+        file.close();
+    }
+};
+
+class BitReader {
+private:
+    ifstream &file;
+    uint8_t temp;
+    int c;
+
+public:
+    BitReader(ifstream &f) : file(f), temp(0), c(0){}
+
+    uint32_t ReadBitSequence(int length){
+        uint32_t result = 0;
+
+        for (int i = 0; i < length; i++){
+            if (c == 0){
+                int byte = file.get();
+                temp = static_cast<uint8_t>(byte);
+                c = 8;
+            }
+
+            int bit = (temp >> 7) & 1;
+            temp <<= 1;
+            c--;
+            result = (result << 1) | bit;
+        }
+
+        return result;
+    }
+
+    ~BitReader(){
+        file.close();
+    }
+};
+
+
+//Huffman
+struct Node{
+    uint32_t freq;
+    int symbol;
+    int left;
+    int right;
+};
+
+struct Code{
+    uint32_t bits;
+    int length;
+};
+
+Node tree[512];
+Code codes[256];
+
+void build_codes(int node, uint32_t bits, int length){
+    if (tree[node].symbol >= 0){
+        codes[tree[node].symbol] = {bits, length};
+        return;
+    }
+
+    build_codes(tree[node].left, bits << 1, length + 1);
+    build_codes(tree[node].right, (bits << 1) | 1, length + 1);
+}
+
+int build_tree(uint32_t freq[256]){
+    struct PQNode{
+        uint32_t freq;
+        int index;
+        bool operator>(const PQNode &o) const { return freq > o.freq; }
+    };
+
+    priority_queue<PQNode, vector<PQNode>, greater<PQNode>> pq;
+
+    int node_count = 0;
+
+    for (int i = 0; i < 256; i++){
+        if (freq[i] > 0){
+            tree[node_count] = {freq[i], i, -1, -1};
+            pq.push({freq[i], node_count});
+            node_count++;
+        }
+    }
+
+    if (pq.size() == 1){
+        int i = pq.top().index;
+        tree[node_count] = {freq[i], -1, i, -1};
+        return node_count;
+    }
+
+    while (pq.size() > 1){
+        auto a = pq.top();
+        pq.pop();
+
+        auto b = pq.top();
+        pq.pop();
+
+        tree[node_count] = {
+            a.freq + b.freq,
+            -1,
+            a.index,
+            b.index
+        };
+
+        pq.push({tree[node_count].freq, node_count});
+        node_count++;
+    }
+
+    return pq.top().index;
+}
+
+
+void compressHUFF(const string &input, const string &output){
+    ifstream in(input, ios::binary);
+    ofstream out(output, ios::binary);
+
+    uint32_t freq[256] = {0};
+    vector<uint8_t> data;
+    uint8_t byte;
+
+    while (in.read((char *)&byte, 1)){
+        freq[byte]++;
+        data.push_back(byte);
+    }
+
+    for (int i = 0; i < 256; i++) out.write((char *)&freq[i], sizeof(uint32_t));
+
+    int root = build_tree(freq);
+    build_codes(root, 0, 0);
+    BitWriter writer(out);
+
+    for (uint8_t b : data) writer.WriteBitSequence(codes[b].bits, codes[b].length);
+}
+
+void decompressHUFF(const string &input, const string &output){
+    ifstream in(input, ios::binary);
+    ofstream out(output, ios::binary);
+
+    uint32_t freq[256];
+
+    for (int i = 0; i < 256; i++) in.read((char *)&freq[i], sizeof(uint32_t));
+    uint64_t total = 0;
+    for (int i = 0; i < 256; i++) total += freq[i];
+
+    int root = build_tree(freq);
+    BitReader reader(in);
+    int node = root;
+
+    vector<uint8_t> buffer;
+    buffer.reserve(65536);
+
+    while (total > 0){
+        int bit = reader.ReadBitSequence(1);
+        node = (bit == 0) ? tree[node].left : tree[node].right;
+
+        if (tree[node].symbol >= 0){
+            buffer.push_back((uint8_t)tree[node].symbol);
+
+            node = root;
+            total--;
+
+            if (buffer.size() >= 65536){
+                out.write((char*)buffer.data(), buffer.size());
+                buffer.clear();
+            }
+        }
+    }
+
+    if (!buffer.empty()) out.write((char*)buffer.data(), buffer.size());
+}
+
+
+//LZW
+struct Dictionary{
+    int prefix;
+    uint8_t symbol;
+};
+
+const int max_size = 32768;
+Dictionary d[max_size];
+int d_size;
+
+void initialize_dict() {
+    for (int i = 0; i < 256; i++) {
+        d[i].prefix = -1;
+        d[i].symbol = (uint8_t)i;
+    }
+    d_size = 256;
+}
+
+int Find(int prefix, uint8_t symbol) {
+    for (int i = 0; i < d_size; i++)
+        if (d[i].prefix == prefix && d[i].symbol == symbol)
+            return i;
+    return -1;
+}
+
+void compressLZW(const string &input, const string &output, int max_bits, int overflow_mode) {
+    ifstream in(input, ios::binary);
+    ofstream out(output, ios::binary);
+
+    out.put((uint8_t)max_bits);
+    out.put((uint8_t)overflow_mode);
+
+    int max_size = 1 << max_bits;
+    int reset_code = max_size - 1;
+
+    initialize_dict(); // 1, 2
+    BitWriter writer(out);
+    uint8_t byte;
+
+    if (!in.read((char*)&byte, 1)) return;
+
+    int prefix = byte;
+
+    while (in.read((char*)&byte, 1)) { // 3
+        int found = Find(prefix, byte); // 4
+
+        if (found != -1) { // 5
+            prefix = found; // 6
+        } else { // 7
+            writer.WriteBitSequence(prefix, max_bits); // 8
+
+            if (d_size < max_size) {
+                int limit = (overflow_mode == 1) ? max_size - 1 : max_size;
+
+                if (d_size < limit) {
+                    d[d_size].prefix = prefix;
+                    d[d_size].symbol = byte;
+                    d_size++;
+                }
+            } else {
+                if (overflow_mode == 1) {
+                    writer.WriteBitSequence(reset_code, max_bits); // 9
+                    initialize_dict();
+                }
+            }
+            prefix = byte; //10
+        }
+    }
+    writer.WriteBitSequence(prefix, max_bits); // 11
+}
+
+uint8_t decode_string(int code, ofstream &out) {
+    static uint8_t stack[max_size];
+    int top = 0;
+
+    while (code != -1 && d[code].prefix != -1) {
+        stack[top++] = d[code].symbol;
+        code = d[code].prefix;
+    }
+
+    stack[top++] = d[code].symbol;
+    uint8_t first = stack[top - 1];
+    for (int i = top - 1; i >= 0; i--)
+        out.put(stack[i]);
+
+    return first;
+}
+
+void decompressLZW(const string &input, const string &output) {
+    ifstream in(input, ios::binary);
+    ofstream out(output, ios::binary);
+
+    int max_bits    = (uint8_t)in.get();
+    int overflow_mode = (uint8_t)in.get();
+
+    int max_size   = 1 << max_bits;
+    int reset_code = max_size - 1;
+
+    initialize_dict(); // 1
+
+    BitReader reader(in); // 2
+
+    int prev_code = reader.ReadBitSequence(max_bits);
+    if (prev_code < 0 || prev_code > 255) return;
+    out.put((uint8_t)prev_code); // 3
+
+    while (true) { // 4
+        int code = reader.ReadBitSequence(max_bits);
+
+        if (overflow_mode == 1 && code == reset_code) { // 5
+            initialize_dict();
+            prev_code = reader.ReadBitSequence(max_bits);
+            out.put((uint8_t)prev_code);
+            continue;
+        }
+
+        uint8_t first_byte = 0;
+
+        if (code < d_size) { // 6
+            first_byte = decode_string(code, out);
+        } else if (code == d_size) {
+            first_byte = decode_string(prev_code, out);
+            out.put(first_byte);
+        }
+
+        int limit = (overflow_mode == 1) ? max_size - 1 : max_size;
+
+        if (d_size < limit) {
+            d[d_size].prefix = prev_code;
+            d[d_size].symbol = first_byte;
+            d_size++;
+        }
+
+        prev_code = code;
+    }
+}
+
+uint64_t GetFileSize(const string& filename){
+    ifstream file(filename, ios::binary | ios::ate);
+    return file.tellg()/1.024;
+}
+
+
+
+
+
+int main()
+{
+
+
+    return 0;
+}
