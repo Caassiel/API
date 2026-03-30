@@ -351,12 +351,6 @@ void decompressLZW(const string &input, const string &output) {
     }
 }
 
-uint64_t GetFileSize(const string& filename){
-    ifstream file(filename, ios::binary | ios::ate);
-    return file.tellg()/1.024;
-}
-
-
 void counting_sort(vector<int>& sa, const vector<int>& rank, int k) {
     int n = sa.size();
     int maxv = *max_element(rank.begin(), rank.end()) + 3;
@@ -381,13 +375,10 @@ void counting_sort(vector<int>& sa, const vector<int>& rank, int k) {
             cout << "ERROR: cnt underflow at key=" << key << endl;
             exit(1);
         }
-
         tmp[--cnt[key]] = sa[i];
     }
-
     sa = tmp;
 }
-
 
 
 //BWT
@@ -419,12 +410,10 @@ vector<uint8_t> bwt_encode(const vector<uint8_t>& data, uint32_t& out_index) {
                 rank[(cur + k) % n] != rank[(prev + k) % n]) {
                 r++;
             }
-
             tmp[cur] = r;
         }
 
         rank = tmp;
-
         if (r == n - 1) break;
     }
 
@@ -451,7 +440,6 @@ vector<uint8_t> bwt_decode(const vector<uint8_t>& code, uint32_t index) {
     vector<uint8_t> full(n);
     vector<int> T(n);
 
-
     for (int i = 0, j = 0; i < n; i++) {
         if (i == index)
             full[i] = 0;
@@ -462,9 +450,7 @@ vector<uint8_t> bwt_decode(const vector<uint8_t>& code, uint32_t index) {
     int count[258] = {0};
 
     for (int i = 0; i < n; i++) count[full[i]]++;
-
     for (int i = 1; i < 258; i++) count[i] += count[i - 1];
-
     for (int i = n - 1; i >= 0; i--) {
         T[--count[full[i]]] = i;
     }
@@ -482,7 +468,7 @@ vector<uint8_t> bwt_decode(const vector<uint8_t>& code, uint32_t index) {
     return res;
 }
 
-const size_t BLOCK_SIZE = 1 << 19; // 1 MB (good default)
+const size_t BLOCK_SIZE = 1 << 19;
 
 void bwt_encode_blocks(const vector<uint8_t>& input, vector<uint8_t>& output) {
     size_t pos = 0;
@@ -495,14 +481,10 @@ void bwt_encode_blocks(const vector<uint8_t>& input, vector<uint8_t>& output) {
         uint32_t idx;
         vector<uint8_t> bwt = bwt_encode(block, idx);
 
-        // --- Write metadata ---
-        // [block_size (4 bytes)] [index (4 bytes)] [data]
         uint32_t blen = (uint32_t)len;
 
         output.insert(output.end(), (uint8_t*)&blen, (uint8_t*)&blen + 4);
         output.insert(output.end(), (uint8_t*)&idx,  (uint8_t*)&idx  + 4);
-
-        // --- Write data ---
         output.insert(output.end(), bwt.begin(), bwt.end());
 
         pos += len;
@@ -515,14 +497,12 @@ vector<uint8_t> bwt_decode_blocks(const vector<uint8_t>& input) {
     size_t pos = 0;
 
     while (pos < input.size()) {
-        // --- Read metadata ---
+
         uint32_t len = *(uint32_t*)&input[pos]; pos += 4;
         uint32_t idx = *(uint32_t*)&input[pos]; pos += 4;
 
-        // --- Read block ---
         vector<uint8_t> block(input.begin() + pos, input.begin() + pos + len);
         pos += len;
-
         vector<uint8_t> decoded = bwt_decode(block, idx);
 
         output.insert(output.end(), decoded.begin(), decoded.end());
@@ -573,8 +553,7 @@ vector<uint8_t> mtf_decode(const vector<uint8_t>& data) {
 
 vector<uint8_t> read_file(const string& filename) {
     ifstream in(filename, ios::binary);
-    return vector<uint8_t>((istreambuf_iterator<char>(in)),
-                            istreambuf_iterator<char>());
+    return vector<uint8_t>((istreambuf_iterator<char>(in)), istreambuf_iterator<char>());
 }
 
 void write_file(const string& filename, const vector<uint8_t>& data) {
@@ -582,7 +561,10 @@ void write_file(const string& filename, const vector<uint8_t>& data) {
     out.write((char*)data.data(), data.size());
 }
 
-
+uint64_t GetFileSize(const string& filename){
+    ifstream file(filename, ios::binary | ios::ate);
+    return file.tellg()/1.024;
+}
 
 int main(int argc, char* argv[]) {
     if (argc < 5) {
@@ -615,10 +597,7 @@ int main(int argc, char* argv[]) {
 
         if (use_bwt) {
             vector<uint8_t> transformed;
-            auto t1 = now();
             bwt_encode_blocks(data, transformed);
-            auto t2 = now();
-            cout << "BWT time: " << t1 - t2 << endl;
             data = transformed;
         }
 
@@ -632,31 +611,36 @@ int main(int argc, char* argv[]) {
 
         if (algo == "huff") {
             compressHUFF(temp1, output);
+            uint64_t original = GetFileSize(temp1);
+            uint64_t encoded  = GetFileSize(output);
+
+            double ratio = (double)encoded /original;
+
+            cout << "Original size:     " << original << " bytes\n";
+            cout << "Encoded size:      " << encoded  << " bytes\n";
+            cout << "Compression ratio: " << ratio    << "\n";
         } else if (algo == "lzw") {
             compressLZW(temp1, output, 15, 1);
-        }
+            uint64_t original = GetFileSize(argv[2]);
+            uint64_t encoded  = GetFileSize(argv[3]);
 
-        cout << "Compression done.\n";
+            double ratio = (double)encoded /original;
+
+            cout << "Original size:     " << original << " bytes\n";
+            cout << "Encoded size:      " << encoded  << " bytes\n";
+            cout << "Compression ratio: " << ratio    << "\n";
+            }
     }
 
     else if (mode == "decode") {
 
-
-        if (algo == "huff") {
-            decompressHUFF(input, temp1);
-        } else if (algo == "lzw") {
-            decompressLZW(input, temp1);
-        }
+        if (algo == "huff") {decompressHUFF(input, temp1);
+        } else if (algo == "lzw") {decompressLZW(input, temp1);}
 
         vector<uint8_t> data = read_file(temp1);
 
-        if (use_mtf) {
-            data = mtf_decode(data);
-        }
-
-        if (use_bwt) {
-            data = bwt_decode_blocks(data);
-        }
+        if (use_mtf) {data = mtf_decode(data);}
+        if (use_bwt) {data = bwt_decode_blocks(data);}
 
         write_file(output, data);
 
