@@ -5,6 +5,7 @@
 #include <vector>
 #include <algorithm>
 #include <numeric>
+#include <time.h>
 using namespace std;
 
 class BitWriter {
@@ -355,53 +356,181 @@ uint64_t GetFileSize(const string& filename){
     return file.tellg()/1.024;
 }
 
-//BWT
-vector<uint8_t> bwt_encode(const vector<uint8_t>& data, uint32_t& out_index) {
-    int n = data.size();
-    vector<int> index(n);
-    iota(index.begin(), index.end(), 0);
 
-    sort(index.begin(), index.end(), [&](int a, int b) {
-        for (int i = 0; i < n; i++) {
-            uint8_t ca = data[(a + i) % n];
-            uint8_t cb = data[(b + i) % n];
-            if (ca != cb) return ca < cb;
-        }
-        return false;
-    });
+void counting_sort(vector<int>& sa, const vector<int>& rank, int k) {
+    int n = sa.size();
+    int maxv = *max_element(rank.begin(), rank.end()) + 3;
 
-    vector<uint8_t> res(n);
+    vector<int> cnt(maxv, 0);
+    vector<int> tmp(n);
+
     for (int i = 0; i < n; i++) {
-        res[i] = data[(index[i] + n - 1) % n];
-        if (index[i] == 0) out_index = i;
+        int key = rank[(sa[i] + k) % n] + 1;
+        cnt[key]++;
     }
 
-    return res;
-}
-
-vector<uint8_t> bwt_decode(const vector<uint8_t>& code, uint32_t index) {
-    int n = code.size();
-    int pos = index;
-
-    vector<int> T(n);
-    vector<uint8_t> res(n);
-
-    int count[256] = {0};
-    int starts[256] = {0};
-    int next[256] = {0};
-
-    for (uint8_t b : code)          count[b]++;
-    for (int i = 1; i < 256; i++)   starts[i] = starts[i-1] + count[i-1];
-    for (int i = 0; i < 256; i++)   next[i] = starts[i];
-    for (int i = 0; i < n; i++)     T[next[code[i]]++] = i;
+    for (int i = 1; i < maxv; i++)
+        cnt[i] += cnt[i - 1];
 
     for (int i = n - 1; i >= 0; i--) {
-        pos = T[pos];
-        res[i] = code[pos];
+        int j = sa[i] + k;
+        if (j >= n) j -= n;
+        int key = rank[j] + 1;
+
+        if (cnt[key] == 0) {
+            cout << "ERROR: cnt underflow at key=" << key << endl;
+            exit(1);
+        }
+
+        tmp[--cnt[key]] = sa[i];
+    }
+
+    sa = tmp;
+}
+
+
+
+//BWT
+vector<uint8_t> bwt_encode(const vector<uint8_t>& data, uint32_t& out_index) {
+    int n = data.size() + 1;
+
+    vector<int> sa(n), rank(n), tmp(n);
+
+    for (int i = 0; i < n; i++) {
+        sa[i] = i;
+        if (i < (int)data.size())
+            rank[i] = data[i] + 1;
+        else
+            rank[i] = 0;
+    }
+
+    for (int k = 1; k < n; k <<= 1) {
+        counting_sort(sa, rank, k);
+        counting_sort(sa, rank, 0);
+
+        tmp[sa[0]] = 0;
+        int r = 0;
+
+        for (int i = 1; i < n; i++) {
+            int cur = sa[i];
+            int prev = sa[i - 1];
+
+            if (rank[cur] != rank[prev] ||
+                rank[(cur + k) % n] != rank[(prev + k) % n]) {
+                r++;
+            }
+
+            tmp[cur] = r;
+        }
+
+        rank = tmp;
+
+        if (r == n - 1) break;
+    }
+
+    vector<uint8_t> res;
+    res.reserve(n - 1);
+
+    for (int i = 0; i < n; i++) {
+        int idx = sa[i];
+
+        if (idx == 0) {
+            out_index = i;
+        } else {
+            res.push_back(data[idx - 1]);
+        }
     }
 
     return res;
 }
+
+
+vector<uint8_t> bwt_decode(const vector<uint8_t>& code, uint32_t index) {
+    int n = code.size() + 1;
+
+    vector<uint8_t> full(n);
+    vector<int> T(n);
+
+
+    for (int i = 0, j = 0; i < n; i++) {
+        if (i == index)
+            full[i] = 0;
+        else
+            full[i] = code[j++] + 1;
+    }
+
+    int count[258] = {0};
+
+    for (int i = 0; i < n; i++) count[full[i]]++;
+
+    for (int i = 1; i < 258; i++) count[i] += count[i - 1];
+
+    for (int i = n - 1; i >= 0; i--) {
+        T[--count[full[i]]] = i;
+    }
+
+    vector<uint8_t> res(n - 1);
+
+    int pos = T[index];
+
+    for (int i = n - 2; i >= 0; i--) {
+        uint8_t val = full[pos];
+        res[i] = val - 1;
+        pos = T[pos];
+    }
+
+    return res;
+}
+
+const size_t BLOCK_SIZE = 1 << 19; // 1 MB (good default)
+
+void bwt_encode_blocks(const vector<uint8_t>& input, vector<uint8_t>& output) {
+    size_t pos = 0;
+
+    while (pos < input.size()) {
+        size_t len = min(BLOCK_SIZE, input.size() - pos);
+
+        vector<uint8_t> block(input.begin() + pos, input.begin() + pos + len);
+
+        uint32_t idx;
+        vector<uint8_t> bwt = bwt_encode(block, idx);
+
+        // --- Write metadata ---
+        // [block_size (4 bytes)] [index (4 bytes)] [data]
+        uint32_t blen = (uint32_t)len;
+
+        output.insert(output.end(), (uint8_t*)&blen, (uint8_t*)&blen + 4);
+        output.insert(output.end(), (uint8_t*)&idx,  (uint8_t*)&idx  + 4);
+
+        // --- Write data ---
+        output.insert(output.end(), bwt.begin(), bwt.end());
+
+        pos += len;
+    }
+}
+
+vector<uint8_t> bwt_decode_blocks(const vector<uint8_t>& input) {
+    vector<uint8_t> output;
+
+    size_t pos = 0;
+
+    while (pos < input.size()) {
+        // --- Read metadata ---
+        uint32_t len = *(uint32_t*)&input[pos]; pos += 4;
+        uint32_t idx = *(uint32_t*)&input[pos]; pos += 4;
+
+        // --- Read block ---
+        vector<uint8_t> block(input.begin() + pos, input.begin() + pos + len);
+        pos += len;
+
+        vector<uint8_t> decoded = bwt_decode(block, idx);
+
+        output.insert(output.end(), decoded.begin(), decoded.end());
+    }
+
+    return output;
+}
+
 
 //MTF
 vector<uint8_t> mtf_encode(const vector<uint8_t>& data) {
@@ -442,13 +571,97 @@ vector<uint8_t> mtf_decode(const vector<uint8_t>& data) {
 }
 
 
+vector<uint8_t> read_file(const string& filename) {
+    ifstream in(filename, ios::binary);
+    return vector<uint8_t>((istreambuf_iterator<char>(in)),
+                            istreambuf_iterator<char>());
+}
+
+void write_file(const string& filename, const vector<uint8_t>& data) {
+    ofstream out(filename, ios::binary);
+    out.write((char*)data.data(), data.size());
+}
 
 
 
-int main()
-{
+int main(int argc, char* argv[]) {
+    if (argc < 5) {
 
+        cout << "Usage:\n";
+        cout << "  program encode huff input output [--bwt] [--mtf]\n";
+        cout << "  program decode huff input output\n";
+        cout << "  program encode lzw  input output [--bwt] [--mtf]\n";
+        cout << "  program decode lzw  input output\n";
+        return 1;
+    }
+
+    string mode = argv[1];
+    string algo = argv[2];
+    string input = argv[3];
+    string output = argv[4];
+
+    bool use_bwt = false, use_mtf = false;
+    for (int i = 5; i < argc; i++) {
+        string flag = argv[i];
+        if (flag == "--bwt") use_bwt = true;
+        if (flag == "--mtf") use_mtf = true;
+    }
+
+    string temp1 = "tmp1.bin";
+    string temp2 = "tmp2.bin";
+
+    if (mode == "encode") {
+        vector<uint8_t> data = read_file(input);
+
+        if (use_bwt) {
+            vector<uint8_t> transformed;
+            auto t1 = now();
+            bwt_encode_blocks(data, transformed);
+            auto t2 = now();
+            cout << "BWT time: " << t1 - t2 << endl;
+            data = transformed;
+        }
+
+        if (use_mtf) {
+            data = mtf_encode(data);
+            write_file(temp1, data);
+        } else {
+            write_file(temp1, data);
+        }
+
+
+        if (algo == "huff") {
+            compressHUFF(temp1, output);
+        } else if (algo == "lzw") {
+            compressLZW(temp1, output, 15, 1);
+        }
+
+        cout << "Compression done.\n";
+    }
+
+    else if (mode == "decode") {
+
+
+        if (algo == "huff") {
+            decompressHUFF(input, temp1);
+        } else if (algo == "lzw") {
+            decompressLZW(input, temp1);
+        }
+
+        vector<uint8_t> data = read_file(temp1);
+
+        if (use_mtf) {
+            data = mtf_decode(data);
+        }
+
+        if (use_bwt) {
+            data = bwt_decode_blocks(data);
+        }
+
+        write_file(output, data);
+
+        cout << "Decompression done.\n";
+    }
 
     return 0;
 }
-
