@@ -5,7 +5,7 @@
 #include <vector>
 #include <algorithm>
 #include <numeric>
-#include <time.h>
+#include <unordered_map>
 using namespace std;
 
 class BitWriter {
@@ -16,7 +16,6 @@ private:
 
 public:
     BitWriter(ofstream &f) : file(f), temp(0), c(0){}
-
     void WriteBitSequence(uint32_t data, int length){
         for (int i = length - 1; i >= 0; i--){
             int bit = (data >> i) & 1;
@@ -30,17 +29,14 @@ public:
             }
         }
     }
-
     void Padding(){
         if (c > 0){
             temp <<= (8 - c);
             file.put(temp);
-
             temp = 0;
             c = 0;
         }
     }
-
     ~BitWriter(){
         Padding();
         file.close();
@@ -102,7 +98,6 @@ void build_codes(int node, uint32_t bits, int length){
         codes[tree[node].symbol] = {bits, length};
         return;
     }
-
     build_codes(tree[node].left, bits << 1, length + 1);
     build_codes(tree[node].right, (bits << 1) | 1, length + 1);
 }
@@ -215,6 +210,11 @@ void decompressHUFF(const string &input, const string &output){
 
 
 //LZW
+unordered_map<int, int> dict_map;
+
+inline int make_key(int prefix, uint8_t symbol) {
+    return (prefix << 8) | symbol;
+}
 struct Dictionary{
     int prefix;
     uint8_t symbol;
@@ -225,18 +225,19 @@ Dictionary d[max_size];
 int d_size;
 
 void initialize_dict() {
+    dict_map.clear();
+    dict_map.reserve(max_size);
     for (int i = 0; i < 256; i++) {
         d[i].prefix = -1;
         d[i].symbol = (uint8_t)i;
+        dict_map[make_key(-1, i)] = i;
     }
     d_size = 256;
 }
 
 int Find(int prefix, uint8_t symbol) {
-    for (int i = 0; i < d_size; i++)
-        if (d[i].prefix == prefix && d[i].symbol == symbol)
-            return i;
-    return -1;
+    auto it = dict_map.find(make_key(prefix, symbol));
+    return (it != dict_map.end()) ? it->second : -1;
 }
 
 void compressLZW(const string &input, const string &output, int max_bits, int overflow_mode) {
@@ -269,6 +270,7 @@ void compressLZW(const string &input, const string &output, int max_bits, int ov
                 int limit = (overflow_mode == 1) ? max_size - 1 : max_size;
 
                 if (d_size < limit) {
+                    dict_map[make_key(prefix, byte)] = d_size;
                     d[d_size].prefix = prefix;
                     d[d_size].symbol = byte;
                     d_size++;
@@ -351,6 +353,9 @@ void decompressLZW(const string &input, const string &output) {
     }
 }
 
+
+
+
 void counting_sort(vector<int>& sa, const vector<int>& rank, int k) {
     int n = sa.size();
     int maxv = *max_element(rank.begin(), rank.end()) + 3;
@@ -370,29 +375,20 @@ void counting_sort(vector<int>& sa, const vector<int>& rank, int k) {
         int j = sa[i] + k;
         if (j >= n) j -= n;
         int key = rank[j] + 1;
-
-        if (cnt[key] == 0) {
-            cout << "ERROR: cnt underflow at key=" << key << endl;
-            exit(1);
-        }
         tmp[--cnt[key]] = sa[i];
     }
     sa = tmp;
 }
 
-
 //BWT
 vector<uint8_t> bwt_encode(const vector<uint8_t>& data, uint32_t& out_index) {
     int n = data.size() + 1;
-
     vector<int> sa(n), rank(n), tmp(n);
 
     for (int i = 0; i < n; i++) {
         sa[i] = i;
-        if (i < (int)data.size())
-            rank[i] = data[i] + 1;
-        else
-            rank[i] = 0;
+        if (i < (int)data.size()) rank[i] = data[i] + 1;
+        else rank[i] = 0;
     }
 
     for (int k = 1; k < n; k <<= 1) {
@@ -405,11 +401,7 @@ vector<uint8_t> bwt_encode(const vector<uint8_t>& data, uint32_t& out_index) {
         for (int i = 1; i < n; i++) {
             int cur = sa[i];
             int prev = sa[i - 1];
-
-            if (rank[cur] != rank[prev] ||
-                rank[(cur + k) % n] != rank[(prev + k) % n]) {
-                r++;
-            }
+            if (rank[cur] != rank[prev] || rank[(cur + k) % n] != rank[(prev + k) % n])  r++;
             tmp[cur] = r;
         }
 
@@ -422,29 +414,23 @@ vector<uint8_t> bwt_encode(const vector<uint8_t>& data, uint32_t& out_index) {
 
     for (int i = 0; i < n; i++) {
         int idx = sa[i];
-
-        if (idx == 0) {
-            out_index = i;
-        } else {
-            res.push_back(data[idx - 1]);
-        }
+        if (idx == 0) out_index = i;
+        else res.push_back(data[idx - 1]);
     }
 
     return res;
 }
 
 
-vector<uint8_t> bwt_decode(const vector<uint8_t>& code, uint32_t index) {
+vector<uint8_t> bwt_decode(const vector<uint8_t>& code, long long index) {
     int n = code.size() + 1;
 
     vector<uint8_t> full(n);
     vector<int> T(n);
 
     for (int i = 0, j = 0; i < n; i++) {
-        if (i == index)
-            full[i] = 0;
-        else
-            full[i] = code[j++] + 1;
+        if (i == index) full[i] = 0;
+        else full[i] = code[j++] + 1;
     }
 
     int count[258] = {0};
@@ -550,7 +536,6 @@ vector<uint8_t> mtf_decode(const vector<uint8_t>& data) {
     return res;
 }
 
-
 vector<uint8_t> read_file(const string& filename) {
     ifstream in(filename, ios::binary);
     return vector<uint8_t>((istreambuf_iterator<char>(in)), istreambuf_iterator<char>());
@@ -568,7 +553,6 @@ uint64_t GetFileSize(const string& filename){
 
 int main(int argc, char* argv[]) {
     if (argc < 5) {
-
         cout << "Usage:\n";
         cout << "  program encode huff input output [--bwt] [--mtf]\n";
         cout << "  program decode huff input output\n";
@@ -604,10 +588,7 @@ int main(int argc, char* argv[]) {
         if (use_mtf) {
             data = mtf_encode(data);
             write_file(temp1, data);
-        } else {
-            write_file(temp1, data);
-        }
-
+        } else write_file(temp1, data);
 
         if (algo == "huff") {
             compressHUFF(temp1, output);
@@ -615,17 +596,15 @@ int main(int argc, char* argv[]) {
             uint64_t encoded  = GetFileSize(output);
 
             double ratio = (double)encoded /original;
-
             cout << "Original size:     " << original << " bytes\n";
             cout << "Encoded size:      " << encoded  << " bytes\n";
             cout << "Compression ratio: " << ratio    << "\n";
         } else if (algo == "lzw") {
             compressLZW(temp1, output, 15, 1);
-            uint64_t original = GetFileSize(argv[2]);
-            uint64_t encoded  = GetFileSize(argv[3]);
+            uint64_t original = GetFileSize(temp1);
+            uint64_t encoded  = GetFileSize(output);
 
             double ratio = (double)encoded /original;
-
             cout << "Original size:     " << original << " bytes\n";
             cout << "Encoded size:      " << encoded  << " bytes\n";
             cout << "Compression ratio: " << ratio    << "\n";
@@ -634,16 +613,14 @@ int main(int argc, char* argv[]) {
 
     else if (mode == "decode") {
 
-        if (algo == "huff") {decompressHUFF(input, temp1);
-        } else if (algo == "lzw") {decompressLZW(input, temp1);}
+        if (algo == "huff") decompressHUFF(input, temp1);
+        else if (algo == "lzw") decompressLZW(input, temp1);
 
         vector<uint8_t> data = read_file(temp1);
-
-        if (use_mtf) {data = mtf_decode(data);}
-        if (use_bwt) {data = bwt_decode_blocks(data);}
+        if (use_mtf) data = mtf_decode(data);
+        if (use_bwt) data = bwt_decode_blocks(data);
 
         write_file(output, data);
-
         cout << "Decompression done.\n";
     }
 
