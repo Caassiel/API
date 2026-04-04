@@ -31,18 +31,7 @@ uint32_t random_key() {
     return dist(gen);
 }
 
-uint16_t polynomial_hash() {
-    wstring s = random_string();
-    uint32_t p = random_key();
-    uint32_t h = 1;
-
-    for (wchar_t c : s)
-        h = (h * p + (uint32_t)c) % N;
-
-    return (uint16_t)h;
-}
-
-uint32_t check_hash(const wstring& s, uint32_t p) {
+uint32_t poly_hash(const wstring& s, uint32_t p) {
     uint32_t h = 0;
 
     for (wchar_t c : s)
@@ -55,7 +44,7 @@ class Bloom_Filter{
 
 private:
     int s;
-    vector<bool> T;
+    vector<uint8_t> T;
     vector<uint32_t> v;
 
 
@@ -70,16 +59,16 @@ public:
         }
     }
 
-    void Addition(){
+    void Addition(const wstring& str){
         for (uint32_t p : v) {
-            uint32_t idx = polynomial_hash();
+            uint32_t idx = poly_hash(str, p);
             T[idx] = true;
         }
     };
 
     bool DoesContain(const wstring& str){
        for (uint32_t p : v) {
-            uint32_t idx = check_hash(str, p);
+            uint32_t idx = poly_hash(str, p);
             if (!T[idx]) return false;
         }
         return true;
@@ -87,45 +76,47 @@ public:
 
     float Experiment(float a, int s) {
         Bloom_Filter bf(s);
-
         int n = a * N;
-
-        for (int i = 0; i < n; i++)
-            bf.Addition();
-
-
         int M = 0;
-        int tests = 10000;
 
-        for (int i = 0; i < tests; i++) {
+        for (int i = 0; i < n; i++) {
             wstring str = random_string();
-            if (bf.DoesContain(str)) {
-                M = i;
-                break;
-            }
+            bf.Addition(str);
+        }
+
+        while (true) {
+            wstring str = random_string();
+            if (bf.DoesContain(str)) break;
+            M++;
         }
 
         return 1 / M;
     }
-
 
 };
 
 
 int main() {
 
+    int trials = 100;
 
-    for (float a = 0.05; a <= 0.5; a = a + 0.05){
+    for (float a = 0.05; a <= 0.55; a += 0.05){
         float error = 0;
+        float true_error = 0;
 
-        for (int i = 0; i < 100; i++) {
+        for (int i = 0; i < trials; i++) {
             int s = floor(log(2)/a);
-            Bloom_Filter b(a);
+            Bloom_Filter b(s);
             error += b.Experiment(a, s);
+
+            float base = 1 - exp(-a * s);
+            true_error = pow(base, s);
         }
 
-        cout << "Error for alpha = " << a << ":  " << error << "\n";
+        cout << "Error for alpha = " << a << ":  " << error / trials
+             << "\n" << "True error = " << true_error << "\n\n";
     }
 
     return 0;
 }
+
