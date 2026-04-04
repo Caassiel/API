@@ -5,7 +5,7 @@
 using namespace std;
 
 static const int t = 50;
-static const uint32_t N = 1 << 16;
+static const uint32_t N = (1 << 16) + 1;
 
 wstring random_string() {
     static random_device rd;
@@ -24,14 +24,6 @@ wstring random_string() {
     return wstr;
 }
 
-uint32_t random_key() {
-    static random_device rd;
-    static mt19937 gen(rd());
-
-    uniform_int_distribution<uint32_t> dist(31, 10000);
-    return dist(gen);
-}
-
 uint32_t poly_hash(const wstring& s, uint32_t p) {
     uint32_t h = 0;
 
@@ -46,7 +38,7 @@ class Bloom_Filter{
 private:
     int s;
     vector<uint8_t> T;
-    vector<uint32_t> v;
+    uint32_t p1, p2;
 
 
 public:
@@ -55,25 +47,30 @@ public:
         mt19937 gen(rd());
         uniform_int_distribution<uint32_t> dist(31, 10000);
 
-        for (int i = 0; i < s; i++) {
-            v.push_back(dist(gen));
-        }
+        p1 = dist(gen);
+        p2 = dist(gen);
     }
 
     void Addition(const wstring& str){
-        for (uint32_t p : v) {
-            uint32_t idx = poly_hash(str, p);
+        uint32_t h1 = poly_hash(str, p1);
+        uint32_t h2 = poly_hash(str, p2);
+
+        for (int i = 0; i < s; i++) {
+            uint32_t idx = (h1 + i * h2) % N;
             T[idx] = 1;
         }
-    };
+    }
 
     uint8_t DoesContain(const wstring& str){
-       for (uint32_t p : v) {
-            uint32_t idx = poly_hash(str, p);
+        uint32_t h1 = poly_hash(str, p1);
+        uint32_t h2 = poly_hash(str, p2);
+
+        for (int i = 0; i < s; i++) {
+            uint32_t idx = (h1 + i * h2) % N;
             if (!T[idx]) return 0;
         }
         return 1;
-    };
+    }
 
     float Experiment(float a, int s) {
         unordered_set<wstring> inserted;
@@ -120,6 +117,10 @@ int main() {
         cout << "Error for alpha = " << a << ":  " << error / trials
              << "\n" << "True error = " << true_error << "\n\n";
     }
+
+    return 0;
+}
+
 
     return 0;
 }
