@@ -40,7 +40,6 @@ private:
     vector<uint8_t> T;
     uint32_t p1, p2;
 
-
 public:
     Bloom_Filter(int s) : s(s), T(N, 0) {
         random_device rd;
@@ -102,27 +101,34 @@ int main() {
     int trials = 100;
 
     for (float a = 0.05; a <= 0.55; a += 0.05){
-        float error = 0;
-        float true_error = 0;
+        int s_opt = round(log(2) / a);
 
-        for (int i = 0; i < trials; i++) {
-            int s = floor(log(2)/a);
-            Bloom_Filter b(s);
-            error += b.Experiment(a, s);
+        vector<int> s_values = {
+            (int)(0.5 * s_opt),
+            (int)(0.75 * s_opt),
+            s_opt,
+            (int)(1.25 * s_opt),
+            (int)(1.5 * s_opt),
+            (int)(2.0 * s_opt)
+        };
 
-            float base = 1 - exp(-a * s);
-            true_error = pow(base, s);
+        cout << "Current alpha = " << a << "\n\n";
+        for (int s : s_values) {
+            float error = 0;
+            float true_error = 0;
+
+            for (int i = 0; i < trials; i++) {
+                Bloom_Filter b(s);
+                error += b.Experiment(a, s);
+
+                float base = 1 - exp(-a * s);
+                true_error = pow(base, s);
+            }
+            cout << "Error for s = " << s << ":  " << error / trials
+                 << "\n" << "True error = " << true_error << "\n\n";
         }
-
-        cout << "Error for alpha = " << a << ":  " << error / trials
-             << "\n" << "True error = " << true_error << "\n\n";
     }
 
     return 0;
 }
-
-
-    return 0;
-}
-
 
