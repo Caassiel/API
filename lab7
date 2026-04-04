@@ -1,14 +1,15 @@
 #include <iostream>
 #include <random>
 #include <cmath>
+#include <unordered_set>
 using namespace std;
 
 static const int t = 50;
 static const uint32_t N = 1 << 16;
 
 wstring random_string() {
-    random_device rd;
-    mt19937 gen(rd());
+    static random_device rd;
+    static mt19937 gen(rd());
 
     uniform_int_distribution<> len_dist(1, t);
     uniform_int_distribution<> char_dist(0x0400, 0x04FF);
@@ -49,7 +50,7 @@ private:
 
 
 public:
-    Bloom_Filter(int s) : s(s), T(N, false) {
+    Bloom_Filter(int s) : s(s), T(N, 0) {
         random_device rd;
         mt19937 gen(rd());
         uniform_int_distribution<uint32_t> dist(31, 10000);
@@ -62,35 +63,38 @@ public:
     void Addition(const wstring& str){
         for (uint32_t p : v) {
             uint32_t idx = poly_hash(str, p);
-            T[idx] = true;
+            T[idx] = 1;
         }
     };
 
-    bool DoesContain(const wstring& str){
+    uint8_t DoesContain(const wstring& str){
        for (uint32_t p : v) {
             uint32_t idx = poly_hash(str, p);
-            if (!T[idx]) return false;
+            if (!T[idx]) return 0;
         }
-        return true;
+        return 1;
     };
 
     float Experiment(float a, int s) {
-        Bloom_Filter bf(s);
+        unordered_set<wstring> inserted;
+
         int n = a * N;
         int M = 0;
 
         for (int i = 0; i < n; i++) {
             wstring str = random_string();
-            bf.Addition(str);
+            inserted.insert(str);
+            this->Addition(str);
         }
 
         while (true) {
             wstring str = random_string();
-            if (bf.DoesContain(str)) break;
+            if (inserted.count(str)) continue;
+            if (this->DoesContain(str)) break;
             M++;
         }
 
-        return 1 / M;
+        return 1.0f / (M + 1);
     }
 
 };
@@ -119,4 +123,5 @@ int main() {
 
     return 0;
 }
+
 
